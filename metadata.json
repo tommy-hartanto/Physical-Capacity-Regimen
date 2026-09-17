@@ -1,0 +1,6 @@
+{
+  "name": "Physical Capacity Regimen",
+  "description": "Comprehensive physical training regimen and intelligent coach notebook for strength, athleticism, mobility, and endurance.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
