@@ -10,10 +10,22 @@ import { WorkoutExecution } from './components/WorkoutExecution';
 import { PostWorkoutModal } from './components/PostWorkoutModal';
 import { CardioLoggerModal } from './components/CardioLoggerModal';
 import { AssessmentModal } from './components/AssessmentModal';
+import { UtilityTimersModal } from './components/UtilityTimersModal';
+import { PinLockModal } from './components/PinLockModal';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { WorkoutType } from './types/training';
 
 const MainAppContent: React.FC = () => {
-  const { activeWorkout, startWorkout, cancelActiveWorkout, userProfile, currentDayOfWeek } = useTraining();
+  const {
+    activeWorkout,
+    startWorkout,
+    userProfile,
+    currentDayOfWeek,
+    isAppLocked,
+    showUtilityTimers,
+    setShowUtilityTimers
+  } = useTraining();
+
   const [currentTab, setCurrentTab] = useState<TabType>('today');
   const [isExecuting, setIsExecuting] = useState<boolean>(() => !!activeWorkout);
   const [showPostWorkoutModal, setShowPostWorkoutModal] = useState<boolean>(false);
@@ -49,6 +61,11 @@ const MainAppContent: React.FC = () => {
     }
   };
 
+  // If app PIN lock is active on this single-user cloud deployment
+  if (isAppLocked) {
+    return <PinLockModal />;
+  }
+
   // If in active workout execution screen, render full-screen immersive view
   if (isExecuting && activeWorkout) {
     return (
@@ -59,6 +76,9 @@ const MainAppContent: React.FC = () => {
         />
         {showPostWorkoutModal && (
           <PostWorkoutModal onComplete={handlePostWorkoutComplete} />
+        )}
+        {showUtilityTimers && (
+          <UtilityTimersModal onClose={() => setShowUtilityTimers(false)} />
         )}
       </>
     );
@@ -93,6 +113,11 @@ const MainAppContent: React.FC = () => {
         {currentTab === 'settings' && <SettingsView />}
       </main>
 
+      {/* Utility Timers Modal (Stopwatch & Intervals) */}
+      {showUtilityTimers && (
+        <UtilityTimersModal onClose={() => setShowUtilityTimers(false)} />
+      )}
+
       {/* Cardio Logger Modal */}
       {showCardioModal.open && (
         <CardioLoggerModal
@@ -116,8 +141,10 @@ const MainAppContent: React.FC = () => {
 
 export default function App() {
   return (
-    <TrainingProvider>
-      <MainAppContent />
-    </TrainingProvider>
+    <ErrorBoundary>
+      <TrainingProvider>
+        <MainAppContent />
+      </TrainingProvider>
+    </ErrorBoundary>
   );
 }

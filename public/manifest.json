@@ -1,0 +1,17 @@
+{
+  "name": "Physical Capacity Regimen",
+  "short_name": "Capacity",
+  "description": "Comprehensive physical training regimen, intelligent coach notebook, and timers for strength, power, athleticism, and mobility.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#09090b",
+  "theme_color": "#09090b",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/favicon.ico",
+      "sizes": "64x64 32x32 24x24 16x16",
+      "type": "image/x-icon"
+    }
+  ]
+}

@@ -6,7 +6,8 @@ export type WorkoutType =
   | 'swim' 
   | 'full_body_athletic' 
   | 'rest' 
-  | 'run';
+  | 'run'
+  | (string & {});
 
 export type MovementTier = 'prep' | 'power' | 'primary_strength' | 'secondary_movement' | 'structural_tissue' | 'conditioning' | 'optional_accessory';
 
@@ -135,10 +136,45 @@ export interface ScheduledDay {
   isOptionalGymDay?: boolean;
 }
 
+export interface WorkoutTemplateExercise {
+  exerciseId: string;
+  targetSets: number;
+  targetReps?: number;
+  targetRepsRange?: [number, number];
+  targetDurationSec?: number;
+  targetDistanceM?: number;
+  targetRpe?: number;
+  defaultRestSec?: number;
+  coachNote?: string;
+}
+
+export interface WorkoutTemplate {
+  workoutType: WorkoutType;
+  title: string;
+  shortDescription: string;
+  estimatedMinutes: number;
+  exercises: WorkoutTemplateExercise[];
+  isCustom?: boolean;
+}
+
+export interface TimerPreferences {
+  autoStartRest: boolean;
+  restSoundEnabled: boolean;
+  restVibrationEnabled: boolean;
+  restNotificationEnabled: boolean;
+  keepScreenAwake: boolean;
+}
+
+export interface SecurityPreferences {
+  pinEnabled: boolean;
+  pinCode?: string;
+}
+
 export interface UserProfile {
   name: string;
   age: number;
   bodyweightKg: number;
+  unitPreference: 'kg' | 'lbs';
   availableGymDaysPerWeek: 3 | 4;
   schedule: Record<DayOfWeek, WorkoutType>;
   preferredSwimDay: DayOfWeek;
@@ -149,7 +185,13 @@ export interface UserProfile {
   deloadSuggested: boolean;
   lastDeloadWeek: number;
   activeLoadTargets: Record<string, number>; // exerciseId -> targetKg
+  timerPreferences: TimerPreferences;
+  securityPreferences: SecurityPreferences;
+  customTemplates?: Record<string, WorkoutTemplate>;
+  customExercises?: ExerciseDefinition[];
 }
+
+export type CloudSyncStatus = 'idle' | 'syncing' | 'synced' | 'error' | 'offline';
 
 export interface PhysicalAssessmentRecord {
   id: string;
@@ -178,3 +220,4 @@ export interface ReminderConfig {
   notifyRun: boolean;
   notifyReassessment: boolean;
 }
+

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Calendar, Dumbbell, BarChart3, History, Settings, Play } from 'lucide-react';
+import { Calendar, Dumbbell, BarChart3, History, Settings, Play, Timer, Cloud } from 'lucide-react';
 import { useTraining } from '../context/TrainingContext';
 
 export type TabType = 'today' | 'program' | 'capacity' | 'history' | 'settings';
@@ -15,14 +15,22 @@ export const Navigation: React.FC<NavigationProps> = ({
   onSelectTab,
   onStartTodayWorkout
 }) => {
-  const { activeWorkout, userProfile, currentDayOfWeek } = useTraining();
+  const {
+    activeWorkout,
+    userProfile,
+    currentDayOfWeek,
+    cloudSyncStatus,
+    syncToCloudNow,
+    setShowUtilityTimers
+  } = useTraining();
+
   const todayWorkoutType = userProfile.schedule[currentDayOfWeek];
   const isRest = todayWorkoutType === 'rest';
 
   return (
     <>
       {/* Top Header Bar */}
-      <header className="sticky top-0 z-30 bg-zinc-950/90 backdrop-blur-md border-b border-zinc-800/80 px-4 py-3 flex items-center justify-between">
+      <header className="sticky top-0 z-30 bg-zinc-950/90 backdrop-blur-md border-b border-zinc-800/80 px-4 py-3 flex items-center justify-between safe-top">
         <div className="flex items-center space-x-2.5">
           <div className="w-8 h-8 rounded-lg bg-zinc-900 border border-zinc-700 flex items-center justify-center text-zinc-100 font-bold tracking-tight">
             <span className="text-emerald-400 font-mono text-xs">P•C</span>
@@ -41,6 +49,38 @@ export const Navigation: React.FC<NavigationProps> = ({
         </div>
 
         <div className="flex items-center space-x-2">
+          {/* Cloud Sync Status Icon */}
+          <button
+            onClick={() => syncToCloudNow()}
+            className="p-1.5 rounded-lg bg-zinc-900 border border-zinc-800 hover:bg-zinc-850 text-zinc-400 hover:text-zinc-200 transition"
+            title={
+              cloudSyncStatus === 'synced'
+                ? 'Fly.io Cloud Synced'
+                : cloudSyncStatus === 'syncing'
+                ? 'Syncing to Fly.io...'
+                : 'Offline / Local Mode'
+            }
+          >
+            <Cloud
+              className={`w-3.5 h-3.5 ${
+                cloudSyncStatus === 'synced'
+                  ? 'text-emerald-400'
+                  : cloudSyncStatus === 'syncing'
+                  ? 'text-amber-400 animate-pulse'
+                  : 'text-zinc-500'
+              }`}
+            />
+          </button>
+
+          {/* Dedicated Utility Timers Trigger */}
+          <button
+            onClick={() => setShowUtilityTimers(true)}
+            className="p-1.5 rounded-lg bg-zinc-900 border border-zinc-800 hover:bg-zinc-850 text-zinc-300 hover:text-zinc-100 transition"
+            title="Utility Timers: Stopwatch & Intervals"
+          >
+            <Timer className="w-3.5 h-3.5 text-cyan-400" />
+          </button>
+
           {activeWorkout ? (
             <button
               onClick={onStartTodayWorkout}
@@ -62,7 +102,7 @@ export const Navigation: React.FC<NavigationProps> = ({
       </header>
 
       {/* Mobile-First Bottom Navigation Bar */}
-      <nav className="fixed bottom-0 left-0 right-0 z-40 bg-zinc-950/95 backdrop-blur-lg border-t border-zinc-800/80 pb-[calc(env(safe-area-inset-bottom)+6px)] pt-1 px-2">
+      <nav className="fixed bottom-0 left-0 right-0 z-40 bg-zinc-950/95 backdrop-blur-lg border-t border-zinc-800/80 pb-[calc(env(safe-area-inset-bottom)+8px)] pt-1.5 px-2 safe-bottom">
         <div className="max-w-md mx-auto grid grid-cols-5 gap-1">
           <button
             onClick={() => onSelectTab('today')}

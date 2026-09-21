@@ -37,11 +37,13 @@ export const TodayView: React.FC<TodayViewProps> = ({
     workoutLogs,
     cardioLogs,
     startWorkout,
-    activeWorkout
+    activeWorkout,
+    allTemplates,
+    allExercises
   } = useTraining();
 
   const todayType = userProfile.schedule[currentDayOfWeek];
-  const template = WORKOUT_TEMPLATES[todayType];
+  const template = allTemplates[todayType] || WORKOUT_TEMPLATES[todayType];
   const isRest = todayType === 'rest';
   const isCardio = todayType === 'swim' || todayType === 'run';
 
@@ -307,8 +309,12 @@ export const TodayView: React.FC<TodayViewProps> = ({
 
           <div className="space-y-2">
             {template.exercises.map((item, idx) => {
-              const def = EXERCISE_LIBRARY[item.exerciseId];
+              const def = allExercises[item.exerciseId] || EXERCISE_LIBRARY[item.exerciseId];
               const targetKg = userProfile.activeLoadTargets[item.exerciseId];
+              const isLbs = userProfile.unitPreference === 'lbs';
+              const displayWeight = targetKg !== undefined && targetKg > 0
+                ? isLbs ? `${Math.round(targetKg * 2.20462)} lbs` : `${targetKg} kg`
+                : '';
 
               return (
                 <div
@@ -321,7 +327,7 @@ export const TodayView: React.FC<TodayViewProps> = ({
                     </span>
                     <div>
                       <div className="font-semibold text-zinc-200">
-                        {def ? def.name : item.exerciseId}
+                        {def ? def.name : item.exerciseId.replace(/_/g, ' ')}
                       </div>
                       <div className="text-[10px] text-zinc-500 font-mono uppercase">
                         {def?.category.replace(/_/g, ' ')} • {item.targetSets} sets
@@ -331,11 +337,11 @@ export const TodayView: React.FC<TodayViewProps> = ({
 
                   <div className="text-right font-mono">
                     <div className="text-emerald-400 font-semibold text-xs">
-                      {targetKg !== undefined && targetKg > 0 ? `${targetKg} kg` : ''}
+                      {displayWeight}
                       {item.targetReps ? ` ${item.targetReps} reps` : item.targetRepsRange ? ` ${item.targetRepsRange[0]}-${item.targetRepsRange[1]} reps` : item.targetDurationSec ? ` ${item.targetDurationSec}s` : ''}
                     </div>
                     <span className="text-[10px] text-zinc-500">
-                      Rest {item.defaultRestSec || def?.defaultRestSec}s
+                      Rest {item.defaultRestSec || def?.defaultRestSec || 90}s
                     </span>
                   </div>
                 </div>

@@ -8,7 +8,13 @@ import {
   AlertTriangle,
   Volume2,
   Shield,
-  FileText
+  FileText,
+  Cloud,
+  RefreshCw,
+  Lock,
+  Unlock,
+  Smartphone,
+  Bell
 } from 'lucide-react';
 import { useTraining } from '../context/TrainingContext';
 import { soundFx } from '../utils/sound';
@@ -19,13 +25,32 @@ export const SettingsView: React.FC = () => {
     updateTargetLoad,
     exportDataJson,
     importDataJson,
-    resetToDefaults
+    resetToDefaults,
+    cloudSyncStatus,
+    lastCloudSync,
+    syncToCloudNow,
+    setUnitPreference,
+    updateTimerPreferences,
+    updateSecurityPreferences,
+    lockApp
   } = useTraining();
 
   const [importText, setImportText] = useState('');
   const [showImportBox, setShowImportBox] = useState(false);
   const [importStatus, setImportStatus] = useState<string | null>(null);
-  const [soundActive, setSoundActive] = useState<boolean>(soundFx.enabled);
+  const [syncingNow, setSyncingNow] = useState(false);
+
+  // PIN Form
+  const [showPinSetup, setShowPinSetup] = useState(false);
+  const [pinInput, setPinInput] = useState('');
+
+  const isLbs = userProfile.unitPreference === 'lbs';
+
+  const handleManualSync = async () => {
+    setSyncingNow(true);
+    await syncToCloudNow();
+    setSyncingNow(false);
+  };
 
   const handleExport = () => {
     const jsonStr = exportDataJson();
@@ -42,9 +67,10 @@ export const SettingsView: React.FC = () => {
     try {
       const success = importDataJson(importText);
       if (success) {
-        setImportStatus('Data successfully restored!');
+        setImportStatus('Data successfully restored and synced!');
         setShowImportBox(false);
         setImportText('');
+        syncToCloudNow();
       } else {
         setImportStatus('Error: Invalid backup file format.');
       }
@@ -64,6 +90,7 @@ export const SettingsView: React.FC = () => {
           const success = importDataJson(content);
           if (success) {
             setImportStatus('Backup loaded successfully!');
+            syncToCloudNow();
           } else {
             setImportStatus('Failed to parse uploaded backup file.');
           }
@@ -75,13 +102,30 @@ export const SettingsView: React.FC = () => {
     reader.readAsText(file);
   };
 
+  const handleSavePin = () => {
+    if (!pinInput.trim()) return;
+    updateSecurityPreferences({
+      pinEnabled: true,
+      pinCode: pinInput.trim()
+    });
+    setShowPinSetup(false);
+    setPinInput('');
+  };
+
+  const handleDisablePin = () => {
+    updateSecurityPreferences({
+      pinEnabled: false,
+      pinCode: undefined
+    });
+  };
+
   return (
     <div className="max-w-lg mx-auto px-4 py-4 space-y-4">
       {/* Header */}
       <div>
-        <h2 className="text-xl font-bold text-zinc-100">Program & System Settings</h2>
+        <h2 className="text-xl font-bold text-zinc-100">Settings & Cloud Storage</h2>
         <p className="text-xs text-zinc-400">
-          Tune load targets, sound notifications, and manage offline data backup.
+          Fly.io persistence, display units, timers, and single-user privacy lock.
         </p>
       </div>
 
@@ -91,10 +135,232 @@ export const SettingsView: React.FC = () => {
         </div>
       )}
 
+      {/* FLY.IO CLOUD SYNC STATUS */}
+      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-2.5">
+            <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center">
+              <Cloud className="w-4 h-4" />
+            </div>
+            <div>
+              <h3 className="text-xs font-bold uppercase font-mono text-zinc-200">
+                Fly.io Cloud Storage
+              </h3>
+              <p className="text-[11px] text-zinc-400">
+                {cloudSyncStatus === 'synced'
+                  ? `Synced to persistent volume (${lastCloudSync || 'Active'})`
+                  : cloudSyncStatus === 'syncing'
+                  ? 'Saving changes to Fly.io...'
+                  : 'Offline mirror active (auto-syncs on connect)'}
+              </p>
+            </div>
+          </div>
+
+          <button
+            onClick={handleManualSync}
+            disabled={syncingNow}
+            className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold rounded-xl flex items-center space-x-1.5 transition border border-zinc-700"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 text-emerald-400 ${syncingNow ? 'animate-spin' : ''}`} />
+            <span>Sync</span>
+          </button>
+        </div>
+      </div>
+
+      {/* UNIT PREFERENCE (KG VS LBS) */}
+      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 flex items-center justify-between">
+        <div>
+          <div className="text-xs font-bold text-zinc-200">Units of Measurement</div>
+          <div className="text-[11px] text-zinc-400">Display weights in kilograms or pounds</div>
+        </div>
+
+        <div className="flex bg-zinc-950 p-1 rounded-xl border border-zinc-800">
+          <button
+            onClick={() => setUnitPreference('kg')}
+            className={`px-3 py-1 text-xs font-semibold rounded-lg transition ${
+              !isLbs ? 'bg-emerald-500 text-zinc-950 font-bold' : 'text-zinc-400'
+            }`}
+          >
+            kg
+          </button>
+          <button
+            onClick={() => setUnitPreference('lbs')}
+            className={`px-3 py-1 text-xs font-semibold rounded-lg transition ${
+              isLbs ? 'bg-emerald-500 text-zinc-950 font-bold' : 'text-zinc-400'
+            }`}
+          >
+            lbs
+          </button>
+        </div>
+      </div>
+
+      {/* TIMER & ERGONOMICS */}
+      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 space-y-3">
+        <h3 className="text-xs font-bold uppercase font-mono text-zinc-300">
+          Timer & Ergonomics
+        </h3>
+
+        {/* Auto-start rest */}
+        <div className="flex items-center justify-between pt-1">
+          <div>
+            <div className="text-xs font-semibold text-zinc-200">Auto-Start Rest Timer</div>
+            <div className="text-[11px] text-zinc-400">Trigger countdown immediately when a set is logged</div>
+          </div>
+          <button
+            onClick={() => updateTimerPreferences({ autoStartRest: !(userProfile.timerPreferences?.autoStartRest ?? true) })}
+            className={`w-11 h-6 flex items-center rounded-full p-1 transition ${
+              (userProfile.timerPreferences?.autoStartRest ?? true) ? 'bg-emerald-500 justify-end' : 'bg-zinc-800 justify-start'
+            }`}
+          >
+            <span className="w-4 h-4 rounded-full bg-white block shadow-md" />
+          </button>
+        </div>
+
+        {/* Rest chime sound */}
+        <div className="flex items-center justify-between border-t border-zinc-800/80 pt-2.5">
+          <div className="flex items-center space-x-2">
+            <div>
+              <div className="text-xs font-semibold text-zinc-200">Audio Chimes & Tones</div>
+              <div className="text-[11px] text-zinc-400">Synthesized acoustic alert on rest / hold completion</div>
+            </div>
+          </div>
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={() => soundFx.playChime()}
+              className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200"
+              title="Test Sound"
+            >
+              <Volume2 className="w-4 h-4 text-emerald-400" />
+            </button>
+            <button
+              onClick={() => {
+                const next = !(userProfile.timerPreferences?.restSoundEnabled ?? true);
+                updateTimerPreferences({ restSoundEnabled: next });
+                soundFx.enabled = next;
+              }}
+              className={`w-11 h-6 flex items-center rounded-full p-1 transition ${
+                (userProfile.timerPreferences?.restSoundEnabled ?? true) ? 'bg-emerald-500 justify-end' : 'bg-zinc-800 justify-start'
+              }`}
+            >
+              <span className="w-4 h-4 rounded-full bg-white block shadow-md" />
+            </button>
+          </div>
+        </div>
+
+        {/* Screen Wake Lock */}
+        <div className="flex items-center justify-between border-t border-zinc-800/80 pt-2.5">
+          <div>
+            <div className="text-xs font-semibold text-zinc-200">Keep Screen Awake</div>
+            <div className="text-[11px] text-zinc-400">Prevent device sleep during active workouts</div>
+          </div>
+          <button
+            onClick={() => updateTimerPreferences({ keepScreenAwake: !(userProfile.timerPreferences?.keepScreenAwake ?? true) })}
+            className={`w-11 h-6 flex items-center rounded-full p-1 transition ${
+              (userProfile.timerPreferences?.keepScreenAwake ?? true) ? 'bg-emerald-500 justify-end' : 'bg-zinc-800 justify-start'
+            }`}
+          >
+            <span className="w-4 h-4 rounded-full bg-white block shadow-md" />
+          </button>
+        </div>
+
+        {/* Background Notifications */}
+        <div className="flex items-center justify-between border-t border-zinc-800/80 pt-2.5">
+          <div>
+            <div className="text-xs font-semibold text-zinc-200">Background Rest Notification</div>
+            <div className="text-[11px] text-zinc-400">Push notification if tab/phone is in background</div>
+          </div>
+          <button
+            onClick={async () => {
+              if (typeof window !== 'undefined' && 'Notification' in window) {
+                const perm = await Notification.requestPermission();
+                updateTimerPreferences({ restNotificationEnabled: perm === 'granted' });
+              }
+            }}
+            className={`w-11 h-6 flex items-center rounded-full p-1 transition ${
+              userProfile.timerPreferences?.restNotificationEnabled ? 'bg-emerald-500 justify-end' : 'bg-zinc-800 justify-start'
+            }`}
+          >
+            <span className="w-4 h-4 rounded-full bg-white block shadow-md" />
+          </button>
+        </div>
+      </div>
+
+      {/* SINGLE-USER SECURITY PIN LOCK */}
+      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-2.5">
+            <div className="w-8 h-8 rounded-xl bg-cyan-500/20 text-cyan-400 flex items-center justify-center">
+              <Shield className="w-4 h-4" />
+            </div>
+            <div>
+              <div className="text-xs font-bold text-zinc-200">App Passkey / PIN Lock</div>
+              <div className="text-[11px] text-zinc-400">
+                {userProfile.securityPreferences?.pinEnabled
+                  ? 'PIN lock is active on this Fly.io instance'
+                  : 'Protect your fitness logs from public visitors'}
+              </div>
+            </div>
+          </div>
+
+          {userProfile.securityPreferences?.pinEnabled ? (
+            <div className="flex items-center space-x-2">
+              <button
+                onClick={lockApp}
+                className="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg text-xs font-semibold"
+              >
+                Lock Now
+              </button>
+              <button
+                onClick={handleDisablePin}
+                className="px-2.5 py-1 bg-rose-950/40 text-rose-400 border border-rose-900/50 rounded-lg text-xs font-semibold"
+              >
+                Remove
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setShowPinSetup(true)}
+              className="px-3 py-1.5 bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 rounded-xl text-xs font-bold"
+            >
+              Set PIN
+            </button>
+          )}
+        </div>
+
+        {showPinSetup && (
+          <div className="p-3 bg-zinc-950 rounded-xl border border-zinc-800 space-y-2 pt-2">
+            <label className="text-[11px] text-zinc-400 block">Enter 4-digit security PIN:</label>
+            <div className="flex gap-2">
+              <input
+                type="password"
+                maxLength={6}
+                placeholder="e.g., 1234"
+                value={pinInput}
+                onChange={e => setPinInput(e.target.value)}
+                className="flex-1 bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-center font-mono text-base font-bold text-zinc-100"
+              />
+              <button
+                onClick={handleSavePin}
+                disabled={!pinInput.trim()}
+                className="px-3 py-1.5 bg-emerald-500 text-zinc-950 rounded-lg text-xs font-bold"
+              >
+                Save PIN
+              </button>
+              <button
+                onClick={() => setShowPinSetup(false)}
+                className="px-2 py-1.5 bg-zinc-800 text-zinc-400 rounded-lg text-xs"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Target Loads Fine-Tuning */}
       <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 space-y-3">
         <h3 className="text-xs font-bold uppercase font-mono text-zinc-300">
-          Current Working Targets (kg)
+          Working Load Targets ({userProfile.unitPreference || 'kg'})
         </h3>
         <p className="text-[11px] text-zinc-400">
           The progression engine updates these automatically based on RPE, but you can manually adjust them anytime.
@@ -108,73 +374,40 @@ export const SettingsView: React.FC = () => {
             { id: 'weighted_pull_up', label: 'Weighted Pull-Up' },
             { id: 'overhead_press', label: 'Overhead Press' },
             { id: 'bulgarian_split_squat', label: 'Bulgarian Split Squat' }
-          ].map(item => (
-            <div key={item.id} className="bg-zinc-950 p-2.5 rounded-xl border border-zinc-800">
-              <span className="text-[10px] uppercase font-mono text-zinc-400 block mb-1">
-                {item.label}
-              </span>
-              <div className="flex items-center space-x-1">
-                <input
-                  type="number"
-                  step="2.5"
-                  value={userProfile.activeLoadTargets[item.id] || 0}
-                  onChange={e => updateTargetLoad(item.id, parseFloat(e.target.value) || 0)}
-                  className="w-full bg-transparent font-mono font-bold text-base text-zinc-100 focus:outline-none"
-                />
-                <span className="text-xs font-mono text-zinc-500">kg</span>
+          ].map(item => {
+            const rawKg = userProfile.activeLoadTargets[item.id] || 0;
+            const displayVal = isLbs ? Math.round(rawKg * 2.20462 * 10) / 10 : rawKg;
+            return (
+              <div key={item.id} className="bg-zinc-950 p-2.5 rounded-xl border border-zinc-800">
+                <span className="text-[10px] uppercase font-mono text-zinc-400 block mb-1">
+                  {item.label}
+                </span>
+                <div className="flex items-center space-x-1">
+                  <input
+                    type="number"
+                    step={isLbs ? '5' : '2.5'}
+                    value={displayVal}
+                    onChange={e => {
+                      const val = parseFloat(e.target.value) || 0;
+                      updateTargetLoad(item.id, isLbs ? Math.round((val / 2.20462) * 10) / 10 : val);
+                    }}
+                    className="w-full bg-transparent font-mono font-bold text-base text-zinc-100 focus:outline-none"
+                  />
+                  <span className="text-xs font-mono text-zinc-500">{userProfile.unitPreference || 'kg'}</span>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 
-      {/* User Hierarchy & Philosophy Check */}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 space-y-2">
-        <h3 className="text-xs font-bold uppercase font-mono text-zinc-300">
-          Program Core Priorities (Active)
-        </h3>
-        <ol className="text-xs text-zinc-300 space-y-1 font-mono">
-          <li>1. Flexibility / mobility & end-range control</li>
-          <li>2. Athleticism / power & movement quality</li>
-          <li>3. Compound strength (double progression)</li>
-          <li>4. Cardiovascular fitness (Aerobic base run + swim)</li>
-          <li>5. Longevity & connective tissue robustness</li>
-          <li>6. Moderate functional muscle development</li>
-        </ol>
-      </div>
-
-      {/* Audio Preferences */}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 flex items-center justify-between">
-        <div className="flex items-center space-x-3">
-          <Volume2 className="w-5 h-5 text-emerald-400" />
-          <div>
-            <div className="text-xs font-bold text-zinc-200">Rest Timer Chime</div>
-            <div className="text-[11px] text-zinc-400">Audio chime when rest period ends</div>
-          </div>
-        </div>
-
-        <button
-          onClick={() => {
-            soundFx.enabled = !soundActive;
-            setSoundActive(!soundActive);
-          }}
-          className={`px-3 py-1.5 rounded-xl text-xs font-mono font-bold transition border ${
-            soundActive
-              ? 'bg-emerald-500 text-zinc-950 border-emerald-400'
-              : 'bg-zinc-800 text-zinc-400 border-zinc-700'
-          }`}
-        >
-          {soundActive ? 'Enabled' : 'Muted'}
-        </button>
-      </div>
-
-      {/* Data Export & Backup */}
+      {/* Data Export & Portability */}
       <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 space-y-3">
         <h3 className="text-xs font-bold uppercase font-mono text-zinc-300">
-          Data Export & Portability
+          Data Export & Backup
         </h3>
         <p className="text-[11px] text-zinc-400">
-          All your workout logs, progression calibrations, and cardio sessions are saved locally in your browser. Export anytime to back up your history.
+          Export your entire training notebook as JSON anytime.
         </p>
 
         <div className="flex gap-2">
@@ -235,7 +468,7 @@ export const SettingsView: React.FC = () => {
       {/* Reset System to Baseline */}
       <div className="bg-zinc-900/60 border border-zinc-800/60 rounded-2xl p-4 flex items-center justify-between">
         <div>
-          <div className="text-xs font-bold text-zinc-300">Reset to Defaults</div>
+          <div className="text-xs font-bold text-zinc-300">Reset to Baseline</div>
           <div className="text-[11px] text-zinc-500">Restore default templates and starting loads</div>
         </div>
         <button

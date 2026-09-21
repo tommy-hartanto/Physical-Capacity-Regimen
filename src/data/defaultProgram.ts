@@ -1,25 +1,7 @@
-import { WorkoutExerciseItem, WorkoutType, DayOfWeek } from '../types/training';
+import { WorkoutExerciseItem, WorkoutType, DayOfWeek, WorkoutTemplate, WorkoutTemplateExercise, ExerciseDefinition } from '../types/training';
 import { EXERCISE_LIBRARY } from './exerciseLibrary';
 
-export interface WorkoutTemplate {
-  workoutType: WorkoutType;
-  title: string;
-  shortDescription: string;
-  estimatedMinutes: number;
-  exercises: {
-    exerciseId: string;
-    targetSets: number;
-    targetReps?: number;
-    targetRepsRange?: [number, number];
-    targetDurationSec?: number;
-    targetDistanceM?: number;
-    targetRpe?: number;
-    defaultRestSec?: number;
-    coachNote?: string;
-  }[];
-}
-
-export const WORKOUT_TEMPLATES: Record<WorkoutType, WorkoutTemplate> = {
+export const WORKOUT_TEMPLATES: Record<string, WorkoutTemplate> = {
   'lower_power': {
     workoutType: 'lower_power',
     title: 'Lower Strength + Power',
@@ -165,13 +147,26 @@ export function buildWorkoutSession(
   phaseNumber: number = 1,
   phaseWeek: number = 1,
   userTargetLoads: Record<string, number> = DEFAULT_INITIAL_LOADS,
-  timeBudgetMin?: number
+  timeBudgetMin?: number,
+  customTemplates?: Record<string, WorkoutTemplate>,
+  customExercises?: ExerciseDefinition[]
 ): WorkoutExerciseItem[] {
-  const template = WORKOUT_TEMPLATES[workoutType];
+  const mergedTemplates: Record<string, WorkoutTemplate> = {
+    ...WORKOUT_TEMPLATES,
+    ...(customTemplates || {})
+  };
+  const template = mergedTemplates[workoutType];
   if (!template || template.exercises.length === 0) return [];
 
+  const customExMap = (customExercises || []).reduce((acc, ex) => {
+    acc[ex.id] = ex;
+    return acc;
+  }, {} as Record<string, ExerciseDefinition>);
+
+  const getDef = (id: string) => customExMap[id] || EXERCISE_LIBRARY[id];
+
   const items: WorkoutExerciseItem[] = template.exercises.map(item => {
-    const def = EXERCISE_LIBRARY[item.exerciseId];
+    const def = getDef(item.exerciseId);
     const targetLoad = userTargetLoads[item.exerciseId];
 
     const prescribedSets = Array.from({ length: item.targetSets }, (_, i) => ({
@@ -182,13 +177,13 @@ export function buildWorkoutSession(
       targetDurationSec: item.targetDurationSec,
       targetDistanceM: item.targetDistanceM,
       targetRpe: item.targetRpe || 7.5,
-      prescribedRestSec: item.defaultRestSec || def.defaultRestSec,
+      prescribedRestSec: item.defaultRestSec || (def ? def.defaultRestSec : 90),
       notes: item.coachNote
     }));
 
     return {
       exerciseId: item.exerciseId,
-      exerciseName: def ? def.name : item.exerciseId,
+      exerciseName: def ? def.name : item.exerciseId.replace(/_/g, ' '),
       tier: def ? def.category : 'primary_strength',
       prescribedSets,
       performedSets: [],

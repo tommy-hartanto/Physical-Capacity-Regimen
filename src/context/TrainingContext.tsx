@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import {
   UserProfile,
   ActiveWorkoutSession,
@@ -8,7 +8,12 @@ import {
   DayOfWeek,
   WorkoutType,
   PerformedSet,
-  ReminderConfig
+  ReminderConfig,
+  WorkoutTemplate,
+  ExerciseDefinition,
+  CloudSyncStatus,
+  TimerPreferences,
+  SecurityPreferences
 } from '../types/training';
 import { DEFAULT_WEEK_SCHEDULE, DEFAULT_INITIAL_LOADS, WORKOUT_TEMPLATES, buildWorkoutSession } from '../data/defaultProgram';
 import { calculateNextPrescription, evaluateDeloadNeed } from '../utils/progressionEngine';
@@ -22,6 +27,16 @@ interface TrainingContextType {
   onboardingCompleted: boolean;
   reminders: ReminderConfig;
   currentDayOfWeek: DayOfWeek;
+  allTemplates: Record<string, WorkoutTemplate>;
+  allExercises: Record<string, ExerciseDefinition>;
+  cloudSyncStatus: CloudSyncStatus;
+  lastCloudSync: string | null;
+  syncToCloudNow: () => Promise<boolean>;
+  isAppLocked: boolean;
+  unlockApp: (pin: string) => boolean;
+  lockApp: () => void;
+  showUtilityTimers: boolean;
+  setShowUtilityTimers: (show: boolean) => void;
   startWorkout: (type?: WorkoutType, timeBudgetMin?: number) => void;
   updateActiveWorkout: (workout: ActiveWorkoutSession) => void;
   logSetForCurrentExercise: (exerciseIndex: number, set: PerformedSet) => void;
@@ -43,6 +58,18 @@ interface TrainingContextType {
   updateUserProfile: (updates: Partial<UserProfile>) => void;
   updateReminders: (reminders: ReminderConfig) => void;
   saveAssessment: (record: Omit<PhysicalAssessmentRecord, 'id'>) => void;
+  saveCustomTemplate: (template: WorkoutTemplate) => void;
+  deleteCustomTemplate: (workoutType: string) => void;
+  addCustomExercise: (exercise: ExerciseDefinition) => void;
+  updateCustomExercise: (exercise: ExerciseDefinition) => void;
+  deleteCustomExercise: (exerciseId: string) => void;
+  updateWorkoutLog: (updatedLog: WorkoutLogEntry) => void;
+  deleteWorkoutLog: (logId: string) => void;
+  updateCardioLog: (updatedLog: CardioLogEntry) => void;
+  deleteCardioLog: (logId: string) => void;
+  setUnitPreference: (unit: 'kg' | 'lbs') => void;
+  updateTimerPreferences: (prefs: Partial<TimerPreferences>) => void;
+  updateSecurityPreferences: (prefs: Partial<SecurityPreferences>) => void;
   exportDataJson: () => string;
   importDataJson: (json: string) => boolean;
   completeOnboarding: (confirmedLoads: Record<string, number>, daysPerWeek: 3 | 4, swimDay: DayOfWeek, runDay: DayOfWeek) => void;
@@ -52,19 +79,21 @@ interface TrainingContextType {
 const TrainingContext = createContext<TrainingContextType | null>(null);
 
 const STORAGE_KEYS = {
-  USER_PROFILE: 'training_user_profile_v1',
-  ACTIVE_WORKOUT: 'training_active_workout_v1',
-  WORKOUT_LOGS: 'training_workout_logs_v1',
-  CARDIO_LOGS: 'training_cardio_logs_v1',
-  ASSESSMENTS: 'training_assessments_v1',
-  ONBOARDING: 'training_onboarding_v1',
-  REMINDERS: 'training_reminders_v1'
+  USER_PROFILE: 'training_user_profile_v2',
+  ACTIVE_WORKOUT: 'training_active_workout_v2',
+  WORKOUT_LOGS: 'training_workout_logs_v2',
+  CARDIO_LOGS: 'training_cardio_logs_v2',
+  ASSESSMENTS: 'training_assessments_v2',
+  ONBOARDING: 'training_onboarding_v2',
+  REMINDERS: 'training_reminders_v2',
+  APP_UNLOCKED: 'training_app_unlocked_session'
 };
 
 const DEFAULT_PROFILE: UserProfile = {
   name: 'Athlete',
   age: 34,
   bodyweightKg: 78,
+  unitPreference: 'kg',
   availableGymDaysPerWeek: 3,
   schedule: DEFAULT_WEEK_SCHEDULE,
   preferredSwimDay: 'wednesday',
@@ -74,7 +103,20 @@ const DEFAULT_PROFILE: UserProfile = {
   currentWeekNumber: 1,
   deloadSuggested: false,
   lastDeloadWeek: 0,
-  activeLoadTargets: DEFAULT_INITIAL_LOADS
+  activeLoadTargets: DEFAULT_INITIAL_LOADS,
+  timerPreferences: {
+    autoStartRest: true,
+    restSoundEnabled: true,
+    restVibrationEnabled: true,
+    restNotificationEnabled: false,
+    keepScreenAwake: true
+  },
+  securityPreferences: {
+    pinEnabled: false,
+    pinCode: undefined
+  },
+  customTemplates: {},
+  customExercises: []
 };
 
 export function getTodayDayOfWeek(): DayOfWeek {
@@ -83,7 +125,6 @@ export function getTodayDayOfWeek(): DayOfWeek {
   return days[todayIndex];
 }
 
-// Initial realistic baseline data for this user
 const INITIAL_BENCHMARK_ASSESSMENT: PhysicalAssessmentRecord = {
   id: 'baseline_01',
   date: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
@@ -104,29 +145,43 @@ const INITIAL_BENCHMARK_ASSESSMENT: PhysicalAssessmentRecord = {
 };
 
 export const TrainingProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  // 1. User Profile
   const [userProfile, setUserProfile] = useState<UserProfile>(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEYS.USER_PROFILE);
-      return saved ? JSON.parse(saved) : DEFAULT_PROFILE;
+      const saved = localStorage.getItem(STORAGE_KEYS.USER_PROFILE) || localStorage.getItem('training_user_profile_v1');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return {
+          ...DEFAULT_PROFILE,
+          ...parsed,
+          unitPreference: parsed.unitPreference || 'kg',
+          timerPreferences: { ...DEFAULT_PROFILE.timerPreferences, ...(parsed.timerPreferences || {}) },
+          securityPreferences: { ...DEFAULT_PROFILE.securityPreferences, ...(parsed.securityPreferences || {}) },
+          customTemplates: parsed.customTemplates || {},
+          customExercises: parsed.customExercises || []
+        };
+      }
+      return DEFAULT_PROFILE;
     } catch {
       return DEFAULT_PROFILE;
     }
   });
 
+  // 2. Active Workout
   const [activeWorkout, setActiveWorkout] = useState<ActiveWorkoutSession | null>(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEYS.ACTIVE_WORKOUT);
+      const saved = localStorage.getItem(STORAGE_KEYS.ACTIVE_WORKOUT) || localStorage.getItem('training_active_workout_v1');
       return saved ? JSON.parse(saved) : null;
     } catch {
       return null;
     }
   });
 
+  // 3. Workout Logs
   const [workoutLogs, setWorkoutLogs] = useState<WorkoutLogEntry[]>(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEYS.WORKOUT_LOGS);
+      const saved = localStorage.getItem(STORAGE_KEYS.WORKOUT_LOGS) || localStorage.getItem('training_workout_logs_v1');
       if (saved) return JSON.parse(saved);
-      // Sample recent logs to give the user immediate rich history
       return [
         {
           id: 'log_prev_01',
@@ -209,9 +264,10 @@ export const TrainingProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   });
 
+  // 4. Cardio Logs
   const [cardioLogs, setCardioLogs] = useState<CardioLogEntry[]>(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEYS.CARDIO_LOGS);
+      const saved = localStorage.getItem(STORAGE_KEYS.CARDIO_LOGS) || localStorage.getItem('training_cardio_logs_v1');
       if (saved) return JSON.parse(saved);
       return [
         {
@@ -242,15 +298,17 @@ export const TrainingProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   });
 
+  // 5. Assessments
   const [assessments, setAssessments] = useState<PhysicalAssessmentRecord[]>(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEYS.ASSESSMENTS);
+      const saved = localStorage.getItem(STORAGE_KEYS.ASSESSMENTS) || localStorage.getItem('training_assessments_v1');
       return saved ? JSON.parse(saved) : [INITIAL_BENCHMARK_ASSESSMENT];
     } catch {
       return [INITIAL_BENCHMARK_ASSESSMENT];
     }
   });
 
+  // 6. Onboarding & Reminders
   const [onboardingCompleted, setOnboardingCompleted] = useState<boolean>(() => {
     try {
       return localStorage.getItem(STORAGE_KEYS.ONBOARDING) === 'true';
@@ -261,7 +319,7 @@ export const TrainingProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const [reminders, setReminders] = useState<ReminderConfig>(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEYS.REMINDERS);
+      const saved = localStorage.getItem(STORAGE_KEYS.REMINDERS) || localStorage.getItem('training_reminders_v1');
       return saved ? JSON.parse(saved) : {
         enabled: true,
         preferredWorkoutTime: '07:30',
@@ -280,46 +338,215 @@ export const TrainingProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   });
 
-  // Save changes to localStorage
+  // 7. Security PIN Lock
+  const [isAppLocked, setIsAppLocked] = useState<boolean>(() => {
+    try {
+      const pinEnabled = userProfile.securityPreferences?.pinEnabled;
+      const isSessionUnlocked = sessionStorage.getItem(STORAGE_KEYS.APP_UNLOCKED) === 'true';
+      return !!pinEnabled && !isSessionUnlocked;
+    } catch {
+      return false;
+    }
+  });
+
+  // 8. Utility Timers Modal Toggle
+  const [showUtilityTimers, setShowUtilityTimers] = useState<boolean>(false);
+
+  // 9. Cloud Sync Engine (Fly.io)
+  const [cloudSyncStatus, setCloudSyncStatus] = useState<CloudSyncStatus>('idle');
+  const [lastCloudSync, setLastCloudSync] = useState<string | null>(null);
+  const syncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isInitialMount = useRef(true);
+
+  // Consolidated template map
+  const allTemplates = {
+    ...WORKOUT_TEMPLATES,
+    ...(userProfile.customTemplates || {})
+  };
+
+  // Consolidated exercise library map
+  const allExercises = (userProfile.customExercises || []).reduce((acc, ex) => {
+    acc[ex.id] = ex;
+    return acc;
+  }, {} as Record<string, ExerciseDefinition>);
+
+  // Save changes to localStorage immediately as local offline cache
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(userProfile));
+    try {
+      localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(userProfile));
+    } catch (e) {
+      console.warn('Failed to write userProfile to localStorage', e);
+    }
   }, [userProfile]);
 
   useEffect(() => {
-    if (activeWorkout) {
-      localStorage.setItem(STORAGE_KEYS.ACTIVE_WORKOUT, JSON.stringify(activeWorkout));
-    } else {
-      localStorage.removeItem(STORAGE_KEYS.ACTIVE_WORKOUT);
+    try {
+      if (activeWorkout) {
+        localStorage.setItem(STORAGE_KEYS.ACTIVE_WORKOUT, JSON.stringify(activeWorkout));
+      } else {
+        localStorage.removeItem(STORAGE_KEYS.ACTIVE_WORKOUT);
+      }
+    } catch (e) {
+      console.warn('Failed to write activeWorkout to localStorage', e);
     }
   }, [activeWorkout]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.WORKOUT_LOGS, JSON.stringify(workoutLogs));
+    try {
+      localStorage.setItem(STORAGE_KEYS.WORKOUT_LOGS, JSON.stringify(workoutLogs));
+    } catch (e) {
+      console.warn('Failed to write workoutLogs to localStorage', e);
+    }
   }, [workoutLogs]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.CARDIO_LOGS, JSON.stringify(cardioLogs));
+    try {
+      localStorage.setItem(STORAGE_KEYS.CARDIO_LOGS, JSON.stringify(cardioLogs));
+    } catch (e) {
+      console.warn('Failed to write cardioLogs to localStorage', e);
+    }
   }, [cardioLogs]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.ASSESSMENTS, JSON.stringify(assessments));
+    try {
+      localStorage.setItem(STORAGE_KEYS.ASSESSMENTS, JSON.stringify(assessments));
+    } catch (e) {
+      console.warn('Failed to write assessments to localStorage', e);
+    }
   }, [assessments]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.ONBOARDING, String(onboardingCompleted));
+    try {
+      localStorage.setItem(STORAGE_KEYS.ONBOARDING, String(onboardingCompleted));
+    } catch (e) {
+      console.warn('Failed to write onboarding to localStorage', e);
+    }
   }, [onboardingCompleted]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.REMINDERS, JSON.stringify(reminders));
+    try {
+      localStorage.setItem(STORAGE_KEYS.REMINDERS, JSON.stringify(reminders));
+    } catch (e) {
+      console.warn('Failed to write reminders to localStorage', e);
+    }
   }, [reminders]);
+
+  // Cloud Sync to Fly.io server
+  const syncToCloudNow = useCallback(async (): Promise<boolean> => {
+    try {
+      setCloudSyncStatus('syncing');
+      const payload = {
+        data: {
+          userProfile,
+          workoutLogs,
+          cardioLogs,
+          assessments,
+          onboardingCompleted,
+          reminders
+        }
+      };
+
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json'
+      };
+      if (userProfile.securityPreferences?.pinCode) {
+        headers['x-app-pin'] = userProfile.securityPreferences.pinCode;
+      }
+
+      const res = await fetch('/api/data', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload)
+      });
+
+      if (!res.ok) {
+        throw new Error(`Sync failed with HTTP status ${res.status}`);
+      }
+
+      const json = await res.json();
+      setCloudSyncStatus('synced');
+      setLastCloudSync(json.updatedAt || new Date().toLocaleTimeString());
+      return true;
+    } catch (err) {
+      console.warn('[Fly Cloud Sync] Sync skipped or offline:', err);
+      setCloudSyncStatus('offline');
+      return false;
+    }
+  }, [userProfile, workoutLogs, cardioLogs, assessments, onboardingCompleted, reminders]);
+
+  // Initial cloud hydration on boot
+  useEffect(() => {
+    const hydrateFromCloud = async () => {
+      try {
+        setCloudSyncStatus('syncing');
+        const headers: Record<string, string> = {};
+        if (userProfile.securityPreferences?.pinCode) {
+          headers['x-app-pin'] = userProfile.securityPreferences.pinCode;
+        }
+
+        const res = await fetch('/api/data', { headers });
+        if (res.ok) {
+          const json = await res.json();
+          if (json.exists && json.data) {
+            const cloudData = json.data;
+            if (cloudData.userProfile) setUserProfile(cloudData.userProfile);
+            if (cloudData.workoutLogs) setWorkoutLogs(cloudData.workoutLogs);
+            if (cloudData.cardioLogs) setCardioLogs(cloudData.cardioLogs);
+            if (cloudData.assessments) setAssessments(cloudData.assessments);
+            if (cloudData.reminders) setReminders(cloudData.reminders);
+            if (typeof cloudData.onboardingCompleted === 'boolean') {
+              setOnboardingCompleted(cloudData.onboardingCompleted);
+            }
+            setCloudSyncStatus('synced');
+            setLastCloudSync(json.updatedAt || new Date().toLocaleTimeString());
+            console.log('[Fly Cloud Sync] Successfully hydrated data from Fly.io storage');
+            return;
+          } else {
+            // First time on Fly.io volume: sync local baseline to cloud
+            await syncToCloudNow();
+          }
+        } else {
+          setCloudSyncStatus('offline');
+        }
+      } catch {
+        // Running locally or offline in gym
+        setCloudSyncStatus('offline');
+      }
+    };
+
+    hydrateFromCloud();
+  }, []); // Run once on mount
+
+  // Debounced auto-sync to Fly.io whenever core state changes
+  useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
+    }
+
+    if (syncTimeoutRef.current) {
+      clearTimeout(syncTimeoutRef.current);
+    }
+
+    syncTimeoutRef.current = setTimeout(() => {
+      syncToCloudNow();
+    }, 1200);
+
+    return () => {
+      if (syncTimeoutRef.current) {
+        clearTimeout(syncTimeoutRef.current);
+      }
+    };
+  }, [userProfile, workoutLogs, cardioLogs, assessments, reminders, onboardingCompleted, syncToCloudNow]);
 
   const currentDayOfWeek = getTodayDayOfWeek();
 
+  // Actions
   const startWorkout = (type?: WorkoutType, timeBudgetMin?: number) => {
     const workoutTypeToStart = type || userProfile.schedule[currentDayOfWeek];
     if (workoutTypeToStart === 'rest') return;
 
-    const template = WORKOUT_TEMPLATES[workoutTypeToStart];
+    const template = allTemplates[workoutTypeToStart];
     if (!template) return;
 
     const exercises = buildWorkoutSession(
@@ -327,7 +554,9 @@ export const TrainingProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       userProfile.currentPhase,
       userProfile.currentWeekNumber,
       userProfile.activeLoadTargets,
-      timeBudgetMin
+      timeBudgetMin,
+      userProfile.customTemplates,
+      userProfile.customExercises
     );
 
     const newSession: ActiveWorkoutSession = {
@@ -512,7 +741,6 @@ export const TrainingProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setUserProfile(prev => {
       const schedule = { ...prev.schedule };
       if (days === 3) {
-        // Enforce Monday (Lower), Tuesday (Upper), Thursday (Full body), omit 4th day
         schedule.monday = 'lower_power';
         schedule.tuesday = 'upper_posture';
         schedule.thursday = 'full_body_athletic';
@@ -549,7 +777,6 @@ export const TrainingProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       id: `assessment_${Date.now()}`
     };
     setAssessments(prev => [newRecord, ...prev]);
-    // Advance phase if assessment completed
     setUserProfile(prev => ({
       ...prev,
       currentPhase: prev.currentPhase < 3 ? prev.currentPhase + 1 : 1,
@@ -559,9 +786,122 @@ export const TrainingProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }));
   };
 
+  // Custom Templates CRUD
+  const saveCustomTemplate = (template: WorkoutTemplate) => {
+    setUserProfile(prev => ({
+      ...prev,
+      customTemplates: {
+        ...(prev.customTemplates || {}),
+        [template.workoutType]: template
+      }
+    }));
+  };
+
+  const deleteCustomTemplate = (workoutType: string) => {
+    setUserProfile(prev => {
+      const updated = { ...(prev.customTemplates || {}) };
+      delete updated[workoutType];
+      return {
+        ...prev,
+        customTemplates: updated
+      };
+    });
+  };
+
+  // Custom Exercises CRUD
+  const addCustomExercise = (exercise: ExerciseDefinition) => {
+    setUserProfile(prev => ({
+      ...prev,
+      customExercises: [...(prev.customExercises || []), exercise]
+    }));
+  };
+
+  const updateCustomExercise = (exercise: ExerciseDefinition) => {
+    setUserProfile(prev => ({
+      ...prev,
+      customExercises: (prev.customExercises || []).map(ex => (ex.id === exercise.id ? exercise : ex))
+    }));
+  };
+
+  const deleteCustomExercise = (exerciseId: string) => {
+    setUserProfile(prev => ({
+      ...prev,
+      customExercises: (prev.customExercises || []).filter(ex => ex.id !== exerciseId)
+    }));
+  };
+
+  // Logbook Editing & Deletion
+  const updateWorkoutLog = (updatedLog: WorkoutLogEntry) => {
+    setWorkoutLogs(prev => prev.map(log => (log.id === updatedLog.id ? updatedLog : log)));
+  };
+
+  const deleteWorkoutLog = (logId: string) => {
+    setWorkoutLogs(prev => prev.filter(log => log.id !== logId));
+  };
+
+  const updateCardioLog = (updatedLog: CardioLogEntry) => {
+    setCardioLogs(prev => prev.map(log => (log.id === updatedLog.id ? updatedLog : log)));
+  };
+
+  const deleteCardioLog = (logId: string) => {
+    setCardioLogs(prev => prev.filter(log => log.id !== logId));
+  };
+
+  // Preferences
+  const setUnitPreference = (unit: 'kg' | 'lbs') => {
+    setUserProfile(prev => ({ ...prev, unitPreference: unit }));
+  };
+
+  const updateTimerPreferences = (prefs: Partial<TimerPreferences>) => {
+    setUserProfile(prev => ({
+      ...prev,
+      timerPreferences: {
+        ...prev.timerPreferences,
+        ...prefs
+      }
+    }));
+  };
+
+  const updateSecurityPreferences = (prefs: Partial<SecurityPreferences>) => {
+    setUserProfile(prev => ({
+      ...prev,
+      securityPreferences: {
+        ...prev.securityPreferences,
+        ...prefs
+      }
+    }));
+  };
+
+  // PIN Unlock / Lock
+  const unlockApp = (pin: string): boolean => {
+    if (!userProfile.securityPreferences?.pinEnabled || !userProfile.securityPreferences?.pinCode) {
+      setIsAppLocked(false);
+      return true;
+    }
+    if (userProfile.securityPreferences.pinCode === pin.trim()) {
+      setIsAppLocked(false);
+      try {
+        sessionStorage.setItem(STORAGE_KEYS.APP_UNLOCKED, 'true');
+      } catch {
+        // safe
+      }
+      return true;
+    }
+    return false;
+  };
+
+  const lockApp = () => {
+    try {
+      sessionStorage.removeItem(STORAGE_KEYS.APP_UNLOCKED);
+    } catch {
+      // safe
+    }
+    setIsAppLocked(true);
+  };
+
   const exportDataJson = () => {
     const payload = {
-      version: 1,
+      version: 2,
       exportedAt: new Date().toISOString(),
       userProfile,
       workoutLogs,
@@ -619,6 +959,7 @@ export const TrainingProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setAssessments([INITIAL_BENCHMARK_ASSESSMENT]);
     setOnboardingCompleted(false);
     localStorage.clear();
+    sessionStorage.clear();
   };
 
   return (
@@ -632,6 +973,16 @@ export const TrainingProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         onboardingCompleted,
         reminders,
         currentDayOfWeek,
+        allTemplates,
+        allExercises,
+        cloudSyncStatus,
+        lastCloudSync,
+        syncToCloudNow,
+        isAppLocked,
+        unlockApp,
+        lockApp,
+        showUtilityTimers,
+        setShowUtilityTimers,
         startWorkout,
         updateActiveWorkout,
         logSetForCurrentExercise,
@@ -646,6 +997,18 @@ export const TrainingProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         updateUserProfile,
         updateReminders,
         saveAssessment,
+        saveCustomTemplate,
+        deleteCustomTemplate,
+        addCustomExercise,
+        updateCustomExercise,
+        deleteCustomExercise,
+        updateWorkoutLog,
+        deleteWorkoutLog,
+        updateCardioLog,
+        deleteCardioLog,
+        setUnitPreference,
+        updateTimerPreferences,
+        updateSecurityPreferences,
         exportDataJson,
         importDataJson,
         completeOnboarding,

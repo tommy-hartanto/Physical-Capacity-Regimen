@@ -27,13 +27,13 @@ interface WorkoutExecutionProps {
 }
 
 export const WorkoutExecution: React.FC<WorkoutExecutionProps> = ({ onFinish, onCancel }) => {
-  const { activeWorkout, updateActiveWorkout, logSetForCurrentExercise, skipExercise, swapExercise, workoutLogs } = useTraining();
+  const { activeWorkout, updateActiveWorkout, logSetForCurrentExercise, skipExercise, swapExercise, workoutLogs, userProfile, allExercises } = useTraining();
 
   if (!activeWorkout) return null;
 
   const currentIdx = activeWorkout.currentExerciseIndex;
   const currentItem = activeWorkout.exercises[currentIdx];
-  const exerciseDef = currentItem ? EXERCISE_LIBRARY[currentItem.exerciseId] : null;
+  const exerciseDef = currentItem ? (allExercises[currentItem.exerciseId] || EXERCISE_LIBRARY[currentItem.exerciseId]) : null;
 
   // Active set index being logged (first set without a performed completion)
   const currentSetNumber = (currentItem?.performedSets.length || 0) + 1;
@@ -70,15 +70,41 @@ export const WorkoutExecution: React.FC<WorkoutExecutionProps> = ({ onFinish, on
     }
   }, [currentIdx, currentSetNumber]);
 
-  // Rest Timer State
+  // Screen Wake Lock API to prevent device screen timeout during workout
+  useEffect(() => {
+    let wakeLock: any = null;
+    const requestLock = async () => {
+      try {
+        if ('wakeLock' in navigator && (userProfile.timerPreferences?.keepScreenAwake ?? true)) {
+          wakeLock = await (navigator as any).wakeLock.request('screen');
+        }
+      } catch {
+        // wakeLock may not be allowed or supported
+      }
+    };
+    requestLock();
+    return () => {
+      if (wakeLock) {
+        wakeLock.release().catch(() => {});
+      }
+    };
+  }, [userProfile.timerPreferences?.keepScreenAwake]);
+
+  // Timestamp-Resilient Rest Timer State (never drifts in background)
+  const [restTargetEndTime, setRestTargetEndTime] = useState<number | null>(null);
   const [restRemaining, setRestRemaining] = useState<number | null>(null);
   const [restInitial, setRestInitial] = useState<number>(90);
-  const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
+  const [soundEnabled, setSoundEnabled] = useState<boolean>(() => userProfile.timerPreferences?.restSoundEnabled ?? true);
 
   // Overall workout elapsed timer
   const [elapsedSec, setElapsedSec] = useState<number>(() => {
     return Math.floor((Date.now() - new Date(activeWorkout.startedAt).getTime()) / 1000);
   });
+
+  // Hold Countdown Timer State (for planks, isometric holds, duration exercises)
+  const [holdState, setHoldState] = useState<'idle' | 'prep' | 'holding' | 'completed'>('idle');
+  const [holdRemainingSec, setHoldRemainingSec] = useState<number>(0);
+  const [holdTargetEndTime, setHoldTargetEndTime] = useState<number | null>(null);
 
   // Time crunch sheet toggle
   const [showCrunchModal, setShowCrunchModal] = useState<boolean>(false);
@@ -93,32 +119,89 @@ export const WorkoutExecution: React.FC<WorkoutExecutionProps> = ({ onFinish, on
     return () => clearInterval(timer);
   }, [activeWorkout.startedAt]);
 
-  // Rest countdown ticker
+  // Rest countdown ticker (uses Date.now() against target timestamp)
   useEffect(() => {
-    if (restRemaining === null) return;
-    if (restRemaining <= 0) {
-      soundFx.playChime();
-      setRestRemaining(null);
-      return;
-    }
+    if (!restTargetEndTime) return;
 
-    const timer = setInterval(() => {
-      setRestRemaining(prev => {
-        if (prev === null) return null;
-        if (prev <= 4 && prev > 1) {
-          soundFx.playTick();
-        }
-        return prev - 1;
-      });
-    }, 1000);
+    const tick = () => {
+      const now = Date.now();
+      const remaining = Math.max(0, Math.ceil((restTargetEndTime - now) / 1000));
+      setRestRemaining(remaining);
 
+      if (remaining <= 3 && remaining > 0) {
+        soundFx.playCountdownBeep(remaining === 1 ? 880 : 700);
+      }
+
+      if (remaining <= 0) {
+        soundFx.playChime();
+        soundFx.sendNotification('Rest Period Complete', 'Time to start your next set!');
+        setRestTargetEndTime(null);
+        setRestRemaining(null);
+      }
+    };
+
+    tick();
+    const timer = setInterval(tick, 250);
     return () => clearInterval(timer);
-  }, [restRemaining]);
+  }, [restTargetEndTime]);
 
   const handleStartRest = (seconds: number) => {
     setRestInitial(seconds);
     setRestRemaining(seconds);
+    setRestTargetEndTime(Date.now() + seconds * 1000);
   };
+
+  const adjustRest = (deltaSeconds: number) => {
+    setRestTargetEndTime(prev => {
+      const base = prev || (Date.now() + 30000);
+      const newTarget = base + deltaSeconds * 1000;
+      return Math.max(Date.now() + 5000, newTarget);
+    });
+  };
+
+  // Hold Timer logic
+  const startHoldTimer = () => {
+    setHoldState('prep');
+    setHoldRemainingSec(3);
+    setHoldTargetEndTime(Date.now() + 3000);
+    soundFx.playCountdownBeep(600);
+  };
+
+  const cancelHoldTimer = () => {
+    setHoldState('idle');
+    setHoldTargetEndTime(null);
+    setHoldRemainingSec(0);
+  };
+
+  useEffect(() => {
+    if (holdState === 'idle' || holdState === 'completed' || !holdTargetEndTime) return;
+
+    const interval = setInterval(() => {
+      const now = Date.now();
+      const remaining = Math.max(0, Math.ceil((holdTargetEndTime - now) / 1000));
+      setHoldRemainingSec(remaining);
+
+      if (remaining <= 3 && remaining > 0) {
+        soundFx.playCountdownBeep(remaining === 1 ? 880 : 700);
+      }
+
+      if (remaining <= 0) {
+        if (holdState === 'prep') {
+          setHoldState('holding');
+          setHoldRemainingSec(inputDuration);
+          setHoldTargetEndTime(Date.now() + inputDuration * 1000);
+          soundFx.playGoTone();
+        } else if (holdState === 'holding') {
+          setHoldState('completed');
+          setHoldTargetEndTime(null);
+          soundFx.playChime();
+          soundFx.sendNotification('Hold Completed!', `${currentItem?.exerciseName || 'Exercise'} hold done.`);
+        }
+      }
+    }, 200);
+
+    return () => clearInterval(interval);
+  }, [holdState, holdTargetEndTime, inputDuration, currentItem?.exerciseName]);
 
   const handleLogSet = () => {
     if (!currentItem || !targetSet) return;
@@ -135,10 +218,14 @@ export const WorkoutExecution: React.FC<WorkoutExecutionProps> = ({ onFinish, on
     });
 
     setSetNote('');
+    setHoldState('idle');
 
-    // Trigger Rest Timer
-    const restSeconds = targetSet.prescribedRestSec || exerciseDef?.defaultRestSec || 90;
-    handleStartRest(restSeconds);
+    // Trigger Rest Timer if auto-start rest is enabled
+    const autoRest = userProfile.timerPreferences?.autoStartRest ?? true;
+    if (autoRest) {
+      const restSeconds = targetSet.prescribedRestSec || exerciseDef?.defaultRestSec || 90;
+      handleStartRest(restSeconds);
+    }
 
     // If this was the last set of this exercise, check if all exercises completed or auto advance
     const totalSets = currentItem.prescribedSets.length;
@@ -472,25 +559,37 @@ export const WorkoutExecution: React.FC<WorkoutExecutionProps> = ({ onFinish, on
                 <div className="grid grid-cols-2 gap-3">
                   {exerciseDef?.loadType !== 'duration_sec' && exerciseDef?.loadType !== 'bodyweight' && (
                     <div className="bg-zinc-950/80 p-3 rounded-xl border border-zinc-800/80">
-                      <span className="text-[11px] font-mono text-zinc-400 uppercase block mb-1">
-                        Weight (kg)
-                      </span>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-[11px] font-mono text-zinc-400 uppercase">
+                          Weight ({userProfile.unitPreference || 'kg'})
+                        </span>
+                        {userProfile.unitPreference === 'lbs' && (
+                          <span className="text-[10px] font-mono text-zinc-500">
+                            ~{inputWeight} kg
+                          </span>
+                        )}
+                      </div>
                       <div className="flex items-center justify-between">
                         <button
-                          onClick={() => setInputWeight(prev => Math.max(0, prev - 2.5))}
+                          onClick={() => setInputWeight(prev => Math.max(0, userProfile.unitPreference === 'lbs' ? Math.round((prev - 2.27) * 10) / 10 : prev - 2.5))}
                           className="w-8 h-8 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 flex items-center justify-center font-bold active:scale-95"
                         >
                           <Minus className="w-4 h-4" />
                         </button>
-                        <input
-                          type="number"
-                          step="0.5"
-                          value={inputWeight}
-                          onChange={e => setInputWeight(parseFloat(e.target.value) || 0)}
-                          className="w-16 bg-transparent text-center text-xl font-bold font-mono text-zinc-100 focus:outline-none"
-                        />
+                        <div className="flex items-baseline justify-center">
+                          <input
+                            type="number"
+                            step={userProfile.unitPreference === 'lbs' ? '1' : '0.5'}
+                            value={userProfile.unitPreference === 'lbs' ? Math.round(inputWeight * 2.20462 * 10) / 10 : inputWeight}
+                            onChange={e => {
+                              const val = parseFloat(e.target.value) || 0;
+                              setInputWeight(userProfile.unitPreference === 'lbs' ? Math.round((val / 2.20462) * 10) / 10 : val);
+                            }}
+                            className="w-16 bg-transparent text-center text-xl font-bold font-mono text-zinc-100 focus:outline-none"
+                          />
+                        </div>
                         <button
-                          onClick={() => setInputWeight(prev => prev + 2.5)}
+                          onClick={() => setInputWeight(prev => (userProfile.unitPreference === 'lbs' ? Math.round((prev + 2.27) * 10) / 10 : prev + 2.5))}
                           className="w-8 h-8 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 flex items-center justify-center font-bold active:scale-95"
                         >
                           <Plus className="w-4 h-4" />
@@ -500,27 +599,76 @@ export const WorkoutExecution: React.FC<WorkoutExecutionProps> = ({ onFinish, on
                   )}
 
                   {exerciseDef?.loadType === 'duration_sec' ? (
-                    <div className="col-span-2 bg-zinc-950/80 p-3 rounded-xl border border-zinc-800/80">
-                      <span className="text-[11px] font-mono text-zinc-400 uppercase block mb-1">
-                        Hold Duration (sec)
-                      </span>
-                      <div className="flex items-center justify-between max-w-xs mx-auto">
-                        <button
-                          onClick={() => setInputDuration(prev => Math.max(5, prev - 5))}
-                          className="w-9 h-9 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 flex items-center justify-center font-bold active:scale-95"
-                        >
-                          <Minus className="w-4 h-4" />
-                        </button>
-                        <span className="text-2xl font-bold font-mono text-zinc-100">
-                          {inputDuration}s
+                    <div className="col-span-2 bg-zinc-950/80 p-3.5 rounded-xl border border-zinc-800/80 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-mono text-zinc-400 uppercase">
+                          Hold Duration Target
                         </span>
-                        <button
-                          onClick={() => setInputDuration(prev => prev + 5)}
-                          className="w-9 h-9 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 flex items-center justify-center font-bold active:scale-95"
-                        >
-                          <Plus className="w-4 h-4" />
-                        </button>
+                        <div className="flex items-center space-x-2">
+                          <button
+                            onClick={() => setInputDuration(prev => Math.max(5, prev - 5))}
+                            disabled={holdState === 'holding' || holdState === 'prep'}
+                            className="w-7 h-7 rounded-lg bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 text-zinc-200 flex items-center justify-center font-bold"
+                          >
+                            <Minus className="w-3.5 h-3.5" />
+                          </button>
+                          <span className="text-base font-bold font-mono text-zinc-100 min-w-10 text-center">
+                            {inputDuration}s
+                          </span>
+                          <button
+                            onClick={() => setInputDuration(prev => prev + 5)}
+                            disabled={holdState === 'holding' || holdState === 'prep'}
+                            className="w-7 h-7 rounded-lg bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 text-zinc-200 flex items-center justify-center font-bold"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
+
+                      {/* Interactive Countdown Timer */}
+                      {holdState === 'idle' && (
+                        <button
+                          onClick={startHoldTimer}
+                          className="w-full py-2.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 rounded-xl text-xs font-bold flex items-center justify-center space-x-2 transition"
+                        >
+                          <Play className="w-4 h-4 fill-emerald-300" />
+                          <span>Start Hold Countdown ({inputDuration}s)</span>
+                        </button>
+                      )}
+
+                      {holdState === 'prep' && (
+                        <div className="p-3 bg-cyan-950/40 border border-cyan-500/50 rounded-xl text-center animate-pulse">
+                          <span className="text-xs uppercase font-mono text-cyan-400 font-bold block">Get In Position</span>
+                          <span className="text-3xl font-black font-mono text-cyan-200">{holdRemainingSec}</span>
+                        </div>
+                      )}
+
+                      {holdState === 'holding' && (
+                        <div className="p-3.5 bg-emerald-950/40 border border-emerald-500 rounded-xl text-center space-y-2 ring-2 ring-emerald-500/40 animate-pulse">
+                          <div className="flex items-center justify-between text-xs font-mono text-emerald-400">
+                            <span className="uppercase font-bold tracking-wider">Holding...</span>
+                            <button onClick={cancelHoldTimer} className="text-zinc-400 hover:text-zinc-200 underline text-[11px]">
+                              Cancel
+                            </button>
+                          </div>
+                          <div className="text-4xl font-black font-mono text-zinc-100">
+                            {holdRemainingSec}s
+                          </div>
+                          <div className="w-full bg-zinc-900 h-2 rounded-full overflow-hidden">
+                            <div
+                              className="bg-emerald-400 h-full transition-all duration-200"
+                              style={{ width: `${Math.round(((inputDuration - holdRemainingSec) / inputDuration) * 100)}%` }}
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {holdState === 'completed' && (
+                        <div className="p-2.5 bg-emerald-950/40 border border-emerald-500/60 rounded-xl text-center flex items-center justify-center space-x-2 text-xs text-emerald-300 font-bold">
+                          <Check className="w-4 h-4 text-emerald-400" />
+                          <span>Hold Finished! Ready to Log Set.</span>
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <div className="bg-zinc-950/80 p-3 rounded-xl border border-zinc-800/80">
@@ -625,15 +773,15 @@ export const WorkoutExecution: React.FC<WorkoutExecutionProps> = ({ onFinish, on
         )}
       </main>
 
-      {/* Floating Rest Timer Widget (Auto-appears during active rest) */}
+      {/* Floating Rest Timer Widget (Auto-appears during active rest, never drifts) */}
       {restRemaining !== null && (
-        <div className="fixed bottom-20 left-4 right-4 z-40 max-w-lg mx-auto bg-zinc-900 border border-emerald-500/50 rounded-2xl p-3.5 shadow-2xl backdrop-blur-xl flex items-center justify-between animate-in slide-in-from-bottom">
+        <div className="fixed bottom-20 left-4 right-4 z-40 max-w-lg mx-auto bg-zinc-900 border border-emerald-500/50 rounded-2xl p-3.5 shadow-2xl backdrop-blur-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-in slide-in-from-bottom">
           <div className="flex items-center space-x-3">
             <div className="w-10 h-10 rounded-xl bg-emerald-500/20 flex items-center justify-center text-emerald-400 font-mono font-bold text-sm">
               <Clock className="w-5 h-5 animate-spin duration-3000" />
             </div>
             <div>
-              <div className="text-[11px] uppercase font-mono text-zinc-400 font-medium">
+              <div className="text-[10px] uppercase font-mono text-zinc-400 font-medium">
                 Rest Period
               </div>
               <div className="text-2xl font-bold font-mono text-zinc-100 tracking-tight">
@@ -642,10 +790,25 @@ export const WorkoutExecution: React.FC<WorkoutExecutionProps> = ({ onFinish, on
             </div>
           </div>
 
-          <div className="flex items-center space-x-2">
+          <div className="flex items-center gap-1.5 self-end sm:self-auto">
             <button
-              onClick={() => setRestRemaining(prev => (prev ? prev + 30 : 30))}
-              className="px-2.5 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-xs font-mono rounded-lg text-zinc-300 font-semibold"
+              onClick={() => adjustRest(-15)}
+              className="px-2 py-1 bg-zinc-800 hover:bg-zinc-700 text-xs font-mono rounded-lg text-zinc-300 font-semibold"
+              title="-15 seconds"
+            >
+              -15s
+            </button>
+            <button
+              onClick={() => adjustRest(15)}
+              className="px-2 py-1 bg-zinc-800 hover:bg-zinc-700 text-xs font-mono rounded-lg text-zinc-300 font-semibold"
+              title="+15 seconds"
+            >
+              +15s
+            </button>
+            <button
+              onClick={() => adjustRest(30)}
+              className="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-xs font-mono rounded-lg text-emerald-400 font-bold"
+              title="+30 seconds"
             >
               +30s
             </button>
@@ -654,14 +817,17 @@ export const WorkoutExecution: React.FC<WorkoutExecutionProps> = ({ onFinish, on
                 soundFx.enabled = !soundEnabled;
                 setSoundEnabled(!soundEnabled);
               }}
-              className="p-2 bg-zinc-800 hover:bg-zinc-700 rounded-lg text-zinc-400"
+              className="p-1.5 bg-zinc-800 hover:bg-zinc-700 rounded-lg text-zinc-400"
               title={soundEnabled ? 'Mute Chime' : 'Enable Chime'}
             >
               {soundEnabled ? <Volume2 className="w-4 h-4 text-emerald-400" /> : <VolumeX className="w-4 h-4" />}
             </button>
             <button
-              onClick={() => setRestRemaining(null)}
-              className="px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 text-xs font-bold rounded-lg text-zinc-200"
+              onClick={() => {
+                setRestTargetEndTime(null);
+                setRestRemaining(null);
+              }}
+              className="px-3 py-1 bg-zinc-700 hover:bg-zinc-600 text-xs font-bold rounded-lg text-zinc-200"
             >
               Skip
             </button>

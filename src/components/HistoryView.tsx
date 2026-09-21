@@ -1,11 +1,18 @@
 import React, { useState } from 'react';
-import { History, Calendar, Clock, ChevronDown, ChevronUp, ShieldAlert, Waves, Flame } from 'lucide-react';
+import { History, Calendar, Clock, ChevronDown, ChevronUp, ShieldAlert, Waves, Flame, Trash2, Edit3, Save, X } from 'lucide-react';
 import { useTraining } from '../context/TrainingContext';
+import { WorkoutLogEntry, CardioLogEntry } from '../types/training';
 
 export const HistoryView: React.FC = () => {
-  const { workoutLogs, cardioLogs } = useTraining();
+  const { workoutLogs, cardioLogs, updateWorkoutLog, deleteWorkoutLog, updateCardioLog, deleteCardioLog, userProfile } = useTraining();
   const [filter, setFilter] = useState<'all' | 'gym' | 'cardio'>('all');
   const [expandedLogId, setExpandedLogId] = useState<string | null>(null);
+
+  // Edit states
+  const [editingGymLog, setEditingGymLog] = useState<WorkoutLogEntry | null>(null);
+  const [editingCardioLog, setEditingCardioLog] = useState<CardioLogEntry | null>(null);
+
+  const isLbs = userProfile.unitPreference === 'lbs';
 
   // Combine workout logs and cardio logs sorted by date descending
   const allEntries = [
@@ -19,6 +26,18 @@ export const HistoryView: React.FC = () => {
     return true;
   });
 
+  const handleSaveGymEdit = () => {
+    if (!editingGymLog) return;
+    updateWorkoutLog(editingGymLog);
+    setEditingGymLog(null);
+  };
+
+  const handleSaveCardioEdit = () => {
+    if (!editingCardioLog) return;
+    updateCardioLog(editingCardioLog);
+    setEditingCardioLog(null);
+  };
+
   return (
     <div className="max-w-lg mx-auto px-4 py-4 space-y-4">
       {/* Header & Filter */}
@@ -26,7 +45,7 @@ export const HistoryView: React.FC = () => {
         <div>
           <h2 className="text-xl font-bold text-zinc-100">Training Logbook</h2>
           <p className="text-xs text-zinc-400">
-            Immutable session performance history and notes
+            Performance history, notes, and records
           </p>
         </div>
 
@@ -129,23 +148,52 @@ export const HistoryView: React.FC = () => {
                             <div className="flex items-center justify-between font-semibold text-zinc-200">
                               <span>{ex.exerciseName}</span>
                               <span className="text-emerald-400 font-mono text-[11px]">
-                                {ex.targetLoad ? `Target: ${ex.targetLoad}kg` : ''}
+                                {ex.targetLoad ? `Target: ${isLbs ? `${Math.round(ex.targetLoad * 2.20462)} lbs` : `${ex.targetLoad} kg`}` : ''}
                               </span>
                             </div>
 
                             <div className="flex flex-wrap gap-1.5 mt-1.5">
-                              {ex.sets.map(s => (
-                                <span
-                                  key={s.setNumber}
-                                  className="text-[10px] font-mono bg-zinc-950 px-2 py-0.5 rounded border border-zinc-800 text-zinc-300"
-                                >
-                                  Set {s.setNumber}: {s.actualWeightKg ? `${s.actualWeightKg}kg × ` : ''}
-                                  {s.actualReps ? `${s.actualReps}r` : `${s.actualDurationSec}s`} @ RPE {s.actualRpe}
-                                </span>
-                              ))}
+                              {ex.sets.map(s => {
+                                const weightDisplay = s.actualWeightKg
+                                  ? isLbs
+                                    ? `${Math.round(s.actualWeightKg * 2.20462)} lbs × `
+                                    : `${s.actualWeightKg} kg × `
+                                  : '';
+                                return (
+                                  <span
+                                    key={s.setNumber}
+                                    className="text-[10px] font-mono bg-zinc-950 px-2 py-0.5 rounded border border-zinc-800 text-zinc-300"
+                                  >
+                                    Set {s.setNumber}: {weightDisplay}
+                                    {s.actualReps ? `${s.actualReps}r` : `${s.actualDurationSec}s`} @ RPE {s.actualRpe}
+                                  </span>
+                                );
+                              })}
                             </div>
                           </div>
                         ))}
+                      </div>
+
+                      {/* Log Edit & Delete Actions */}
+                      <div className="pt-2 border-t border-zinc-900 flex justify-between items-center">
+                        <button
+                          onClick={() => setEditingGymLog(entry)}
+                          className="px-2.5 py-1 text-xs text-zinc-300 bg-zinc-900 hover:bg-zinc-850 rounded-lg border border-zinc-800 flex items-center space-x-1"
+                        >
+                          <Edit3 className="w-3.5 h-3.5 text-cyan-400" />
+                          <span>Edit Notes</span>
+                        </button>
+                        <button
+                          onClick={() => {
+                            if (confirm(`Delete workout log for ${entry.title} on ${entry.date}?`)) {
+                              deleteWorkoutLog(entry.id);
+                            }
+                          }}
+                          className="px-2.5 py-1 text-xs text-rose-400 hover:bg-rose-950/40 rounded-lg border border-rose-900/50 flex items-center space-x-1"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Delete Log</span>
+                        </button>
                       </div>
                     </div>
                   )}
@@ -179,18 +227,93 @@ export const HistoryView: React.FC = () => {
                     </div>
                   </div>
 
-                  <div className="text-right font-mono">
-                    <div className="text-xs font-bold text-emerald-400">
-                      {entry.distanceKm ? `${entry.distanceKm} km` : entry.distanceMeters ? `${entry.distanceMeters} m` : ''}
+                  <div className="flex items-center space-x-3">
+                    <div className="text-right font-mono">
+                      <div className="text-xs font-bold text-emerald-400">
+                        {entry.distanceKm ? `${entry.distanceKm} km` : entry.distanceMeters ? `${entry.distanceMeters} m` : ''}
+                      </div>
+                      {entry.averagePace && (
+                        <div className="text-[10px] text-zinc-400">{entry.averagePace}</div>
+                      )}
                     </div>
-                    {entry.averagePace && (
-                      <div className="text-[10px] text-zinc-400">{entry.averagePace}</div>
-                    )}
+
+                    <button
+                      onClick={() => {
+                        if (confirm(`Delete ${entry.title} on ${entry.date}?`)) {
+                          deleteCardioLog(entry.id);
+                        }
+                      }}
+                      className="p-1.5 rounded-lg text-zinc-500 hover:text-rose-400"
+                      title="Delete Cardio Log"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
                   </div>
                 </div>
               );
             }
           })}
+        </div>
+      )}
+
+      {/* Modal: Edit Gym Log Notes */}
+      {editingGymLog && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-end sm:items-center justify-center p-4">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-3xl max-w-md w-full p-5 space-y-4">
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+              <h3 className="text-sm font-bold text-zinc-100">Edit Session Summary</h3>
+              <button onClick={() => setEditingGymLog(null)} className="p-1 text-zinc-400">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="text-zinc-400 block mb-1">Session Notes</label>
+                <textarea
+                  rows={3}
+                  value={editingGymLog.summaryNotes || ''}
+                  onChange={e => setEditingGymLog({ ...editingGymLog, summaryNotes: e.target.value })}
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-2.5 text-zinc-100 focus:outline-none focus:border-emerald-500 font-mono text-xs"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-zinc-400 block mb-1">Session RPE (1-10)</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    min="1"
+                    max="10"
+                    value={editingGymLog.sessionRpe}
+                    onChange={e => setEditingGymLog({ ...editingGymLog, sessionRpe: parseFloat(e.target.value) || 7.5 })}
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-2.5 text-zinc-100 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-zinc-400 block mb-1">Energy Level (1-5)</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="5"
+                    value={editingGymLog.energyLevel}
+                    onChange={e => setEditingGymLog({ ...editingGymLog, energyLevel: (parseInt(e.target.value, 10) || 4) as any })}
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-2.5 text-zinc-100 font-mono"
+                  />
+                </div>
+              </div>
+
+              <button
+                onClick={handleSaveGymEdit}
+                className="w-full py-3 bg-emerald-400 hover:bg-emerald-300 text-zinc-950 font-bold rounded-xl text-sm mt-2 flex items-center justify-center space-x-1"
+              >
+                <Save className="w-4 h-4" />
+                <span>Save Changes</span>
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
